@@ -5,13 +5,13 @@ all : server client le-proxy
 
 .PHONY : clean
  
-server : server.o
+server : server.o utils.o
 	$(CXX) -o $@ $(CXXFLAGS) $^
  
-client : client.o
+client : client.o utils.o
 	$(CXX) -o $@ $(CXXFLAGS) $^
  
-le-proxy : le-proxy.o 
+le-proxy : le-proxy.o utils.o
 	$(CXX) -o $@ $(CXXFLAGS) $^
  
 clean : 

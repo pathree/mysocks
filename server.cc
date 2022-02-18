@@ -11,36 +11,35 @@
 #include <sys/time.h>
 #include <unistd.h>
 
+#include <string>
+
+#include "xlog.h"
+
 #define MAX_LINE 16384
 
-#define xlog(format, args...)                                              \
-  do {                                                                     \
-    struct timeval tv;                                                     \
-    gettimeofday(&tv, NULL);                                               \
-    printf("%ld.%ld [%s] " format, tv.tv_sec, tv.tv_usec / 1000, __func__, \
-           ##args);                                                        \
-  } while (0)
+using std::string;
 
 extern void readcb(struct bufferevent *bev, void *arg);
 extern void writecb(struct bufferevent *bev, void *arg);
 extern void eventcb(struct bufferevent *bev, short events, void *arg);
 
 void readcb(struct bufferevent *bev, void *arg) {
-  xlog("fd:%d, rw:%d\n", bufferevent_getfd(bev), bufferevent_get_enabled(bev));
-
   struct evbuffer *input, *output;
 
   input = bufferevent_get_input(bev);
+  xlog("Read from fd:%d, %ld bytes\n", bufferevent_getfd(bev),
+       evbuffer_get_length(input));
+
   output = bufferevent_get_output(bev);
 
   char buf[1024] = {0};
   while (evbuffer_get_length(input)) {
     int n = evbuffer_remove(input, buf, sizeof(buf) - 1);
     /*休眠模拟耗时任务*/
-    sleep(n);
+    // sleep(n);
     evbuffer_add(output, buf, n);
 
-    xlog("send(%d), %s\n", n, buf);
+    xlog("Writting to fd:%d, %d bytes\n", bufferevent_getfd(bev), n);
 
     /*服务器收全数据后，不再读input buffer的数据
      *同时，开启写回调监控数据是否发完*/
@@ -61,7 +60,8 @@ void readcb(struct bufferevent *bev, void *arg) {
 }
 
 void writecb(struct bufferevent *bev, void *arg) {
-  xlog("fd:%d, rw:%d\n", bufferevent_getfd(bev), bufferevent_get_enabled(bev));
+  xlog("Written to fd:%d, rw:%d\n", bufferevent_getfd(bev),
+       bufferevent_get_enabled(bev));
 
   struct evbuffer *output = bufferevent_get_output(bev);
 
@@ -69,33 +69,28 @@ void writecb(struct bufferevent *bev, void *arg) {
    *服务器主动关闭连接*/
   if (evbuffer_get_length(output) == 0) {
     bufferevent_free(bev);
-    xlog("Closing\n");
+    xlog("Closing fd:%d\n", bufferevent_getfd(bev));
   }
 }
 
 void eventcb(struct bufferevent *bev, short events, void *ptr) {
-  xlog("fd:%d, rw:%d, events:0x%x\n", bufferevent_getfd(bev),
-       bufferevent_get_enabled(bev), events);
-
-  struct evbuffer *input = bufferevent_get_input(bev);
-
   if (events & (BEV_EVENT_ERROR | BEV_EVENT_EOF)) {
     if (events & BEV_EVENT_ERROR) {
       xlog("error:%s\n", evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
     }
 
-    if (events & BEV_EVENT_EOF) {
-      xlog("left:%ld\n", evbuffer_get_length(input));
-    }
-
-    xlog("Closing\n");
+    xlog("Closing fd:%d\n", bufferevent_getfd(bev));
     bufferevent_free(bev);
   }
 }
 
 static void accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
                       struct sockaddr *a, int slen, void *arg) {
-  xlog("fd:%d\n", fd);
+  char client_ip[256] = {0};
+  int client_port = 0;
+  sock_ntop(a, client_ip, sizeof(client_ip), &client_port);
+
+  xlog("New conn from client(%s:%d), fd:%d\n", client_ip, client_port, fd);
 
   struct event_base *base = (struct event_base *)arg;
 
@@ -164,7 +159,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  xlog("listener on %s\n", argv[1]);
+  xlog("Listening on %s\n", argv[1]);
 
   event_base_dispatch(base);
 

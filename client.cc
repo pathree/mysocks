@@ -4,77 +4,55 @@
 #include <event2/event.h>
 #include <event2/util.h>
 
-#include <errno.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <time.h>
-
-#include <stdio.h>
-
-#define xlog(format, args...)                                              \
-  do {                                                                     \
-    struct timeval tv;                                                     \
-    gettimeofday(&tv, NULL);                                               \
-    printf("%ld.%ld [%s] " format, tv.tv_sec, tv.tv_usec / 1000, __func__, \
-           ##args);                                                        \
-  } while (0)
-
-extern void readcb(struct bufferevent *bev, void *arg);
-extern void writecb(struct bufferevent *bev, void *arg);
-extern void eventcb(struct bufferevent *bev, short events, void *arg);
+#include "xlog.h"
 
 char req[1024] = {0};
 
-void readcb(struct bufferevent *bev, void *arg) {
-  xlog("\n");
+static void readcb(struct bufferevent *bev, void *arg);
+static void writecb(struct bufferevent *bev, void *arg);
+static void eventcb(struct bufferevent *bev, short events, void *arg);
 
-  struct evbuffer *input = bufferevent_get_input(bev);
-
-  char buf[1024];
-  while (evbuffer_get_length(input)) {
-    int n = evbuffer_remove(input, buf, sizeof(buf));
-    xlog("recv:%d\n", n);
-    fwrite(buf, 1, n, stdout);
-    fwrite("\n", 1, 1, stdout);
-    fflush(stdout);
-  }
-}
-
-void writecb(struct bufferevent *bev, void *arg) {
-  xlog("\n");
-
-  struct evbuffer *output = bufferevent_get_output(bev);
-  xlog("output len:%ld\n", evbuffer_get_length(output));
-}
-
-void send_req(struct bufferevent *bev) {
-  xlog("\n");
-
+static void send_req(struct bufferevent *bev) {
   struct evbuffer *output = bufferevent_get_output(bev);
   char buf[1024] = {0};
   int n = 0;
 
-  // n = sprintf(buf, "1234567890abcd\n");
   n = sprintf(buf, req);
   n += sprintf(buf + n, "\n");
   evbuffer_add(output, buf, n);
-  xlog("send(%d), %s\n", n, buf);
+  xlog("Writting to fd:%d, %d bytes\n", bufferevent_getfd(bev), n);
 }
 
-void eventcb(struct bufferevent *bev, short events, void *arg) {
-  xlog("events:0x%x\n", events);
+static void readcb(struct bufferevent *bev, void *arg) {
+  struct evbuffer *input = bufferevent_get_input(bev);
+  xlog("Read from fd:%d, %ld bytes\n", bufferevent_getfd(bev),
+       evbuffer_get_length(input));
 
+  char buf[1024];
+  while (evbuffer_get_length(input)) {
+    int n = evbuffer_remove(input, buf, sizeof(buf));
+    fwrite(buf, 1, n, stdout);
+    // fwrite("\n", 1, 1, stdout);
+    fflush(stdout);
+  }
+}
+
+static void writecb(struct bufferevent *bev, void *arg) {
+  xlog("Written to fd:%d, rw:%d\n", bufferevent_getfd(bev),
+       bufferevent_get_enabled(bev));
+}
+
+static void eventcb(struct bufferevent *bev, short events, void *arg) {
   /*等待连接完成后再发送数据*/
   if (events & BEV_EVENT_CONNECTED) {
-    xlog("Connect okay\n");
+    xlog("Connected okay on fd:%d\n", bufferevent_getfd(bev));
     send_req(bev);
   } else if (events & (BEV_EVENT_ERROR | BEV_EVENT_EOF)) {
     if (events & BEV_EVENT_ERROR) {
       xlog("error:%s\n", evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
     }
 
-    xlog("Closing\n");
+    xlog("Closing fd:%d\n", bufferevent_getfd(bev));
     bufferevent_free(bev);
   }
 }

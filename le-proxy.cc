@@ -33,6 +33,8 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+#include "xlog.h"
+
 struct STREAM {
   int stream_id;
 
@@ -45,14 +47,6 @@ std::unordered_map<int, STREAM *> streams;
 static struct event_base *base;
 
 #define MAX_OUTPUT (512 * 1024)
-
-#define xlog(format, args...)                                              \
-  do {                                                                     \
-    struct timeval tv;                                                     \
-    gettimeofday(&tv, NULL);                                               \
-    printf("%ld.%ld [%s] " format, tv.tv_sec, tv.tv_usec / 1000, __func__, \
-           ##args);                                                        \
-  } while (0)
 
 static void drained_writecb(struct bufferevent *bev, void *arg);
 static void readcb(struct bufferevent *bev, void *arg);
@@ -83,7 +77,7 @@ static STREAM *stream_new(struct bufferevent *bev_in) {
   char header[128] = {0};
   memcpy(header, beginning, len);
 
-  xlog("forward to: %s\n", header);
+  xlog("Parse header: %s\n", header);
 
   /*分析地址端口合法性*/
   struct sockaddr_storage connect_to_addr;
@@ -105,7 +99,7 @@ static STREAM *stream_new(struct bufferevent *bev_in) {
     return NULL;
   }
 
-  /*放入streams*/
+  /*放入streams, 使用bev_in的fd做stream_id*/
   STREAM *stream = new STREAM();
   stream->stream_id = stream_id;
   stream->bev_in = bev_in;
@@ -113,7 +107,8 @@ static STREAM *stream_new(struct bufferevent *bev_in) {
 
   streams[stream_id] = stream;
 
-  xlog("new stream:%d\n", stream_id);
+  xlog("New stream: %d --> %d\n", bufferevent_getfd(bev_in),
+       bufferevent_getfd(bev_out));
 
   /*移除header数据*/
   evbuffer_drain(input, len);
@@ -141,23 +136,23 @@ static void stream_free(STREAM *stream) {
     stream->bev_out = NULL;
   }
 
-  xlog("delete stream:%d\n", stream->stream_id);
+  xlog("Deleted stream:%d\n", stream->stream_id);
 
   delete stream;
 }
 
 static void readcb(struct bufferevent *bev, void *arg) {
-  xlog("=== curr_fd:%d, rw:%d\n", bufferevent_getfd(bev),
-       bufferevent_get_enabled(bev));
+  struct evbuffer *input, *output;
 
-  STREAM *stream = NULL;
+  input = bufferevent_get_input(bev);
+  xlog("Read from fd:%d, %ld bytes\n", bufferevent_getfd(bev),
+       evbuffer_get_length(input));
 
-  /*如果arg为空, 建立数据流stream*/
-  if (arg == NULL) {
+  STREAM *stream = (STREAM *)arg;
+
+  /*如果stream为空, 建立新的数据流*/
+  if (stream == NULL) {
     stream = stream_new(bev);
-    if (!stream) return;
-  } else {
-    stream = (STREAM *)arg;
   }
 
   struct bufferevent *partner = NULL;
@@ -169,24 +164,19 @@ static void readcb(struct bufferevent *bev, void *arg) {
     partner = stream->bev_in;
   }
 
-  /*把src的数据转发到dst*/
-  struct evbuffer *src, *dst;
-  src = bufferevent_get_input(bev);
-  dst = bufferevent_get_output(partner);
-  long src_len = evbuffer_get_length(src);
+  /*数据转发*/
+  output = bufferevent_get_output(partner);
+  // evbuffer_add_buffer(output, input);
+  char buf[1024] = {0};
+  while (evbuffer_get_length(input)) {
+    int n = evbuffer_remove(input, buf, sizeof(buf) - 1);
+    evbuffer_add(output, buf, n);
 
-  evbuffer_add_buffer(dst, src);
-  // char buf[1024] = {0};
-  // while (evbuffer_get_length(src)) {
-  //   int n = evbuffer_remove(src, buf, sizeof(buf) - 1);
-  //   evbuffer_add(dst, buf, n);
-  // }
+    xlog("Forwarding %d --> %d,  %d bytes\n", bufferevent_getfd(bev),
+         bufferevent_getfd(partner), n);
+  }
 
-  xlog("%d -> %d: %ld\n", bufferevent_getfd(bev), bufferevent_getfd(partner),
-       src_len);
-
-  xlog("dst len:%ld\n", evbuffer_get_length(dst));
-  if (evbuffer_get_length(dst) >= MAX_OUTPUT) {
+  if (evbuffer_get_length(output) >= MAX_OUTPUT) {
     /* We're giving the other side data faster than it can
      * pass it on.  Stop reading here until we have drained the
      * other side to MAX_OUTPUT/2 bytes. */
@@ -222,21 +212,15 @@ static void close_on_finished_writecb(struct bufferevent *bev, void *arg) {
 }
 
 static void eventcb(struct bufferevent *bev, short events, void *arg) {
-  xlog("=== curr_fd:%d, rw:%d, events:0x%x\n", bufferevent_getfd(bev),
-       bufferevent_get_enabled(bev), events);
+  STREAM *stream = (STREAM *)arg;
 
   if (events & BEV_EVENT_CONNECTED) {
-    xlog("Connect okay\n");
+    xlog("Connected okay on fd:%d\n", bufferevent_getfd(bev));
   }
 
-  STREAM *stream = NULL;
   struct bufferevent *partner = NULL;
-  if (arg) {
-    stream = (STREAM *)arg;
-    if (bev == stream->bev_in)
-      partner = stream->bev_out;
-    else
-      partner = stream->bev_in;
+  if (stream) {
+    partner = (bev == stream->bev_in) ? stream->bev_out : stream->bev_in;
   }
 
   if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
@@ -259,11 +243,11 @@ static void eventcb(struct bufferevent *bev, short events, void *arg) {
       } else {
         /* We have nothing left to say to the other
          * side; close it. */
-        xlog("Closing %d\n", bufferevent_getfd(partner));
+        xlog("Closing fd:%d\n", bufferevent_getfd(partner));
       }
     }
 
-    xlog("Closing %d\n", bufferevent_getfd(bev));
+    xlog("Closing fd:%d\n", bufferevent_getfd(bev));
     stream_free(stream);
   }
 }
@@ -279,6 +263,11 @@ static void syntax(void) {
 
 static void accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
                       struct sockaddr *a, int slen, void *p) {
+  char client_ip[256] = {0};
+  int client_port = 0;
+  sock_ntop(a, client_ip, sizeof(client_ip), &client_port);
+  xlog("New conn from client(%s:%d), fd:%d\n", client_ip, client_port, fd);
+
   struct bufferevent *bev_in;
 
   bev_in = bufferevent_socket_new(
@@ -311,7 +300,7 @@ int main(int argc, char **argv) {
       LEV_OPT_CLOSE_ON_FREE | LEV_OPT_CLOSE_ON_EXEC | LEV_OPT_REUSEABLE, -1,
       (struct sockaddr *)&listen_on_addr, socklen);
 
-  xlog("listener on 127.0.0.1:80\n");
+  xlog("Listening on 127.0.0.1:80\n");
   event_base_dispatch(base);
 
   evconnlistener_free(listener);
