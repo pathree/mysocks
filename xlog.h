@@ -8,6 +8,7 @@
 #include <time.h>
 
 char *sock_ntop(const struct sockaddr *sa, char str[], int strsize, int *port);
+int getsockaddr_from_fd(int fd, char ip[], int ipsize, int *port);
 
 #define xlog(format, args...)                                            \
   do {                                                                   \

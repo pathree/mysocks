@@ -153,6 +153,11 @@ static void readcb(struct bufferevent *bev, void *arg) {
   /*如果stream为空, 建立新的数据流*/
   if (stream == NULL) {
     stream = stream_new(bev);
+    if (!stream) {
+      xlog("Closing %d\n", bufferevent_getfd(bev));
+      bufferevent_free(bev);
+      return;
+    }
   }
 
   struct bufferevent *partner = NULL;
@@ -252,21 +257,15 @@ static void eventcb(struct bufferevent *bev, short events, void *arg) {
   }
 }
 
-static void syntax(void) {
-  fputs("Syntax:\n", stderr);
-  fputs("   le-proxy <listen-on-addr>\n", stderr);
-  fputs("Example:\n", stderr);
-  fputs("   le-proxy 127.0.0.1:8088\n", stderr);
-
-  exit(1);
-}
-
 static void accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
                       struct sockaddr *a, int slen, void *p) {
   char client_ip[256] = {0};
   int client_port = 0;
   sock_ntop(a, client_ip, sizeof(client_ip), &client_port);
   xlog("New conn from client(%s:%d), fd:%d\n", client_ip, client_port, fd);
+
+  getsockaddr_from_fd(fd, client_ip, sizeof(client_ip), &client_port);
+  xlog("New conn to server(%s:%d), fd:%d\n", client_ip, client_port, fd);
 
   struct bufferevent *bev_in;
 
@@ -277,7 +276,24 @@ static void accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
   bufferevent_enable(bev_in, EV_READ | EV_WRITE);
 }
 
+static void syntax(void) {
+  fputs("Syntax:\n", stderr);
+  fputs("   le-proxy [listen-on-addr]\n", stderr);
+  fputs("Example(default):\n", stderr);
+  fputs("   le-proxy 0.0.0.0:80\n", stderr);
+
+  exit(1);
+}
+
 int main(int argc, char **argv) {
+  char addr_port[128] = {0};
+  if (argc == 1)
+    sprintf(addr_port, "0.0.0.0:80");
+  else if (argc == 2)
+    sprintf(addr_port, "%s", argv[1]);
+  else
+    syntax();
+
   int socklen;
 
   struct evconnlistener *listener;
@@ -285,8 +301,8 @@ int main(int argc, char **argv) {
   struct sockaddr_storage listen_on_addr;
   memset(&listen_on_addr, 0, sizeof(listen_on_addr));
   socklen = sizeof(listen_on_addr);
-  if (evutil_parse_sockaddr_port(
-          "127.0.0.1:80", (struct sockaddr *)&listen_on_addr, &socklen) < 0)
+  if (evutil_parse_sockaddr_port(addr_port, (struct sockaddr *)&listen_on_addr,
+                                 &socklen) < 0)
     syntax();
 
   base = event_base_new();
@@ -300,7 +316,7 @@ int main(int argc, char **argv) {
       LEV_OPT_CLOSE_ON_FREE | LEV_OPT_CLOSE_ON_EXEC | LEV_OPT_REUSEABLE, -1,
       (struct sockaddr *)&listen_on_addr, socklen);
 
-  xlog("Listening on 127.0.0.1:80\n");
+  xlog("Listening on %s\n", addr_port);
   event_base_dispatch(base);
 
   evconnlistener_free(listener);

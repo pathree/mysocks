@@ -120,22 +120,26 @@ static void accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
 
 static void syntax(void) {
   fputs("Syntax:\n", stderr);
-  fputs("   server <listen-on-addr>\n", stderr);
-  fputs("Example:\n", stderr);
-  fputs("   server 127.0.0.1:8081\n", stderr);
+  fputs("   server [listen-on-addr]\n", stderr);
+  fputs("Example(default):\n", stderr);
+  fputs("   server 0.0.0.0:8088\n", stderr);
 
   exit(1);
 }
 
 int main(int argc, char **argv) {
-  if (argc < 2) {
+  char addr_port[128] = {0};
+  if (argc == 1)
+    sprintf(addr_port, "0.0.0.0:8088");
+  else if (argc == 2)
+    sprintf(addr_port, "%s", argv[1]);
+  else
     syntax();
-  }
 
   struct sockaddr_storage listen_on_addr;
   memset(&listen_on_addr, 0, sizeof(listen_on_addr));
   int listen_on_addrlen = sizeof(listen_on_addr);
-  if (evutil_parse_sockaddr_port(argv[1], (struct sockaddr *)&listen_on_addr,
+  if (evutil_parse_sockaddr_port(addr_port, (struct sockaddr *)&listen_on_addr,
                                  &listen_on_addrlen) < 0) {
     perror("evutil_parse_sockaddr_port");
     return 1;
@@ -159,7 +163,7 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  xlog("Listening on %s\n", argv[1]);
+  xlog("Listening on %s\n", addr_port);
 
   event_base_dispatch(base);
 
