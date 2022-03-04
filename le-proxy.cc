@@ -73,9 +73,9 @@ static STREAM *stream_new(struct bufferevent *bev_in) {
     return NULL;
   }
 
-  int len = cp - beginning;
+  int header_len = cp - beginning;
   char header[128] = {0};
-  memcpy(header, beginning, len);
+  memcpy(header, beginning, header_len);
 
   xlog("Parse header: %s\n", header);
 
@@ -111,7 +111,7 @@ static STREAM *stream_new(struct bufferevent *bev_in) {
        bufferevent_getfd(bev_out));
 
   /*移除header数据*/
-  evbuffer_drain(input, len);
+  evbuffer_drain(input, header_len + 1);
 
   /*设置读回调函数*/
   bufferevent_setcb(bev_in, readcb, NULL, eventcb, stream);
@@ -186,6 +186,7 @@ static void readcb(struct bufferevent *bev, void *arg) {
      * pass it on.  Stop reading here until we have drained the
      * other side to MAX_OUTPUT/2 bytes. */
     bufferevent_setcb(partner, readcb, drained_writecb, eventcb, bev);
+
     bufferevent_setwatermark(partner, EV_WRITE, MAX_OUTPUT / 2, MAX_OUTPUT);
     bufferevent_disable(bev, EV_READ);
   }

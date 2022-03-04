@@ -61,7 +61,7 @@ static void syntax(void) {
   fputs("Syntax:\n", stderr);
   fputs("   client <forward-to-addr> <contents>\n", stderr);
   fputs("Example:\n", stderr);
-  fputs("   client 127.0.0.1:8081 HelloWorld\n", stderr);
+  fputs("   client 127.0.0.1:8088 HelloWorld\n", stderr);
 
   exit(1);
 }
