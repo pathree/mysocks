@@ -13,6 +13,7 @@
 
 #include <string>
 
+#include "utils.h"
 #include "xlog.h"
 
 #define MAX_LINE 16384
@@ -130,6 +131,8 @@ void writecb(struct bufferevent *bev, void *arg) {
 }
 
 void eventcb(struct bufferevent *bev, short events, void *arg) {
+  xlog("events: 0x%02x(%s)\n", events, WHATSTR(events));
+
   if (events & (BEV_EVENT_ERROR | BEV_EVENT_EOF)) {
     if (events & BEV_EVENT_ERROR) {
       xlog("error:%s\n", evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));

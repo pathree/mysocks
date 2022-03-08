@@ -26,6 +26,7 @@
 #include <event2/buffer.h>
 #include <event2/bufferevent.h>
 #include <event2/bufferevent_ssl.h>
+#include <event2/dns.h>
 #include <event2/listener.h>
 #include <event2/util.h>
 
@@ -33,18 +34,13 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+#include "utils.h"
 #include "xlog.h"
-
-struct STREAM {
-  int stream_id;
-
-  struct bufferevent *bev_in;
-  struct bufferevent *bev_out;
-};
 
 std::unordered_map<int, STREAM *> streams;
 
 static struct event_base *base;
+static struct evdns_base *dns_base;
 
 #define MAX_OUTPUT (512 * 1024)
 
@@ -52,49 +48,65 @@ static void drained_writecb(struct bufferevent *bev, void *arg);
 static void readcb(struct bufferevent *bev, void *arg);
 static void eventcb(struct bufferevent *bev, short events, void *arg);
 
+/**
+  从bufferevent input buffer第一个报文中提取header
+*/
+static int parse_header(struct bufferevent *bev, HEADER *header) {
+  struct evbuffer *input;
+  input = bufferevent_get_input(bev);
+
+  char *beginning = (char *)evbuffer_pullup(input, -1);
+  if (!beginning) return (-1);
+
+  const char *cp = strchr(beginning, ' ');
+  if (!cp) {
+    xlog("none header\n");
+    return (-1);
+  }
+
+  char header_str[1024] = {0};
+  int header_len = cp - beginning + 1;
+  strncpy(header_str, beginning, header_len);
+
+  cp = strchr(header_str, ':');
+  if (!cp) {
+    xlog("error header:%s\n", header_str);
+    return (-1);
+  }
+
+  xlog("header: %s\n", header_str);
+
+  strncpy(header->addr, header_str, cp - header_str);
+  cp++;
+  header->port = atoi(cp);
+
+  /*从input buffer中删除header数据*/
+  evbuffer_drain(input, header_len);
+  return 0;
+}
+
 static STREAM *stream_new(struct bufferevent *bev_in) {
-  /*stream已存在*/
+  /*如果stream已存在*/
   int stream_id = bufferevent_getfd(bev_in);
   const auto &iter = streams.find(stream_id);
   if (iter != streams.end()) {
     return (iter->second);
   }
 
-  /*从客户端消息中获取服务器地址端口*/
-  struct evbuffer *input;
-  input = bufferevent_get_input(bev_in);
-
-  char *beginning = (char *)evbuffer_pullup(input, -1);
-  if (!beginning) return NULL;
-
-  char *cp = strchr(beginning, ' ');
-  if (!cp) {
-    xlog("no header:%s\n", cp);
-    return NULL;
-  }
-
-  int header_len = cp - beginning;
-  char header[128] = {0};
-  memcpy(header, beginning, header_len);
-
-  xlog("Parse header: %s\n", header);
-
-  /*分析地址端口合法性*/
-  struct sockaddr_storage connect_to_addr;
-  memset(&connect_to_addr, 0, sizeof(connect_to_addr));
-  int connect_to_addrlen = sizeof(connect_to_addr);
-  if (evutil_parse_sockaddr_port(header, (struct sockaddr *)&connect_to_addr,
-                                 &connect_to_addrlen) < 0) {
-    xlog("header error:%s\n", header);
+  /*提取headerd*/
+  HEADER header;
+  if (parse_header(bev_in, &header)) {
     return NULL;
   }
 
   /*连接服务器地址端口*/
   struct bufferevent *bev_out = bufferevent_socket_new(
       base, -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
-  if (bufferevent_socket_connect(bev_out, (struct sockaddr *)&connect_to_addr,
-                                 connect_to_addrlen) < 0) {
-    perror("bufferevent_socket_connect");
+  if (bufferevent_socket_connect_hostname(bev_out, dns_base, AF_INET,
+                                          header.addr,
+                                          header.port)) {  // only ipv4
+    xlog("bufferevent_socket_connect_hostname(%s:%d) failed", header.addr,
+         header.port);
     bufferevent_free(bev_out);
     return NULL;
   }
@@ -109,9 +121,6 @@ static STREAM *stream_new(struct bufferevent *bev_in) {
 
   xlog("New stream: %d --> %d\n", bufferevent_getfd(bev_in),
        bufferevent_getfd(bev_out));
-
-  /*移除header数据*/
-  evbuffer_drain(input, header_len + 1);
 
   /*设置读回调函数*/
   bufferevent_setcb(bev_in, readcb, NULL, eventcb, stream);
@@ -226,6 +235,8 @@ static void close_on_finished_writecb(struct bufferevent *bev, void *arg) {
 }
 
 static void eventcb(struct bufferevent *bev, short events, void *arg) {
+  xlog("events: 0x%02x(%s)\n", events, WHATSTR(events));
+
   STREAM *stream = (STREAM *)arg;
 
   if (events & BEV_EVENT_CONNECTED) {
@@ -239,7 +250,12 @@ static void eventcb(struct bufferevent *bev, short events, void *arg) {
 
   if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
     if (events & BEV_EVENT_ERROR) {
-      xlog("error:%s\n", evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
+      int err = bufferevent_socket_get_dns_error(bev);
+      if (err)
+        xlog("error:%s\n", evutil_gai_strerror(err));
+      else
+        xlog("error:%s\n",
+             evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
     }
 
     /*这里需要判断一下对端还在不在，因为对端可能先触发事件而close释放了*/
@@ -278,9 +294,6 @@ static void accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
   int client_port = 0;
   sock_ntop(a, client_ip, sizeof(client_ip), &client_port);
   xlog("New conn from client(%s:%d), fd:%d\n", client_ip, client_port, fd);
-
-  getsockaddr_from_fd(fd, client_ip, sizeof(client_ip), &client_port);
-  xlog("New conn to server(%s:%d), fd:%d\n", client_ip, client_port, fd);
 
   struct bufferevent *bev_in;
 
@@ -321,10 +334,9 @@ int main(int argc, char **argv) {
     syntax();
 
   base = event_base_new();
-  if (!base) {
-    perror("event_base_new()");
-    return 1;
-  }
+  /*装入/etc/hosts文件进行域名解析,
+   *否则,需要调用evdns_base_resolv_conf_parse做解析*/
+  dns_base = evdns_base_new(base, EVDNS_BASE_INITIALIZE_NAMESERVERS);
 
   listener = evconnlistener_new_bind(
       base, accept_cb, NULL,

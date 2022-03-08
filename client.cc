@@ -4,6 +4,7 @@
 #include <event2/event.h>
 #include <event2/util.h>
 
+#include "utils.h"
 #include "xlog.h"
 
 char req[1024] = {0};
@@ -43,6 +44,8 @@ static void writecb(struct bufferevent *bev, void *arg) {
 }
 
 static void eventcb(struct bufferevent *bev, short events, void *arg) {
+  xlog("events: 0x%02x(%s)\n", events, WHATSTR(events));
+
   /*等待连接完成后再发送数据*/
   if (events & BEV_EVENT_CONNECTED) {
     xlog("Connected okay on fd:%d\n", bufferevent_getfd(bev));
