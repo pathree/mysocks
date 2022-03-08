@@ -10,7 +10,7 @@
 #include <event2/util.h>
 
 #define MAX_OUTPUT (512 * 1024)
-// #define MAX_OUTPUT 2
+// #define MAX_OUTPUT 200
 
 struct STREAM {
   int stream_id;

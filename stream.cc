@@ -192,7 +192,7 @@ void stream_readcb(struct bufferevent *bev, void *arg) {
      *如果对端output buffer低于MAX_OUTPUT的一半，触发drained_writecb
      *高水位MAX_OUTPUT在本代码中不生效的，只有filtering场景才行*/
     bufferevent_setcb(partner, stream_readcb, stream_drained_writecb,
-                      stream_eventcb, bev);
+                      stream_eventcb, stream);
     bufferevent_setwatermark(partner, EV_WRITE, MAX_OUTPUT / 2, MAX_OUTPUT);
     bufferevent_disable(bev, EV_READ);
   }
@@ -201,7 +201,12 @@ void stream_readcb(struct bufferevent *bev, void *arg) {
 void stream_drained_writecb(struct bufferevent *bev, void *arg) {
   xlog("fd:%d\n", bufferevent_getfd(bev));
 
-  struct bufferevent *partner = (struct bufferevent *)arg;
+  STREAM *stream = (STREAM *)arg;
+
+  struct bufferevent *partner = NULL;
+  if (stream) {
+    partner = (bev == stream->bev_in) ? stream->bev_out : stream->bev_in;
+  }
 
   /* We were choking the other side until we drained our outbuf a bit.
    * Now it seems drained. */
@@ -209,8 +214,9 @@ void stream_drained_writecb(struct bufferevent *bev, void *arg) {
    *这个回调发生，说明output buffer的大小低于MAX_OUTPUT一半了
    *这时就可以删除drained_writecb回调，清除写操作的高低水位。
    *此外，还需要恢复原来被禁止读的那边的bev的readcb回调*/
-  bufferevent_setcb(bev, stream_readcb, NULL, stream_eventcb, partner);
+  bufferevent_setcb(bev, stream_readcb, NULL, stream_eventcb, stream);
   bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
+
   if (partner) bufferevent_enable(partner, EV_READ);
 }
 
