@@ -12,7 +12,7 @@ server : server.o utils.o
 client : client.o utils.o
 	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) $^
  
-le-proxy : le-proxy.o utils.o
+le-proxy : le-proxy.o utils.o stream.o
 	$(CXX) -o $@ $(CXXFLAGS) $(LDFLAGS) $^
  
 clean : 

@@ -7,28 +7,8 @@
 #include <string.h>
 #include <time.h>
 
-#include <event2/buffer.h>
-#include <event2/bufferevent.h>
-#include <event2/bufferevent_ssl.h>
-#include <event2/dns.h>
-#include <event2/listener.h>
-#include <event2/util.h>
-
 #include <sys/sysinfo.h>
-
 #include <string>
-
-struct STREAM {
-  int stream_id;
-
-  struct bufferevent *bev_in;
-  struct bufferevent *bev_out;
-};
-
-struct HEADER {
-  char addr[128];
-  int port;
-};
 
 char *sock_ntop(const struct sockaddr *sa, char str[], int strsize, int *port);
 int getsockaddr_from_fd(int fd, char ip[], int ipsize, int *port);
