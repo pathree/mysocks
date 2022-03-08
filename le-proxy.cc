@@ -185,8 +185,13 @@ static void readcb(struct bufferevent *bev, void *arg) {
     /* We're giving the other side data faster than it can
      * pass it on.  Stop reading here until we have drained the
      * other side to MAX_OUTPUT/2 bytes. */
+    /*解释一下：
+     *数据转发后，立即检查一下对端output buffer的大小，
+     *如果超过某个阈值MAX_OUTPUT，把本端的readcb禁了不读了。
+     *然后给对端加一个drained_writecb写回调来监控对端output buffer大小，
+     *如果对端output buffer低于MAX_OUTPUT的一半，触发drained_writecb
+     *高水位MAX_OUTPUT在本代码中不生效的，只有filtering场景才行*/
     bufferevent_setcb(partner, readcb, drained_writecb, eventcb, bev);
-
     bufferevent_setwatermark(partner, EV_WRITE, MAX_OUTPUT / 2, MAX_OUTPUT);
     bufferevent_disable(bev, EV_READ);
   }
@@ -200,18 +205,21 @@ static void drained_writecb(struct bufferevent *bev, void *arg) {
 
   /* We were choking the other side until we drained our outbuf a bit.
    * Now it seems drained. */
+  /*解释一下：
+   *这个回调发生，说明output buffer的大小低于MAX_OUTPUT一半了
+   *这时就可以删除drained_writecb回调，清除写操作的高低水位。
+   *此外，还需要恢复原来被禁止读的那边的bev的readcb回调*/
   bufferevent_setcb(bev, readcb, NULL, eventcb, partner);
   bufferevent_setwatermark(bev, EV_WRITE, 0, 0);
   if (partner) bufferevent_enable(partner, EV_READ);
 }
 
 static void close_on_finished_writecb(struct bufferevent *bev, void *arg) {
-  xlog("=== curr_fd:%d, rw:%d\n", bufferevent_getfd(bev),
-       bufferevent_get_enabled(bev));
+  struct evbuffer *output = bufferevent_get_output(bev);
 
-  struct evbuffer *b = bufferevent_get_output(bev);
-
-  if (evbuffer_get_length(b) == 0) {
+  /*当output buffer的数据发送完成
+   *服务器主动关闭连接*/
+  if (evbuffer_get_length(output) == 0) {
     xlog("Closing %d\n", bufferevent_getfd(bev));
     bufferevent_free(bev);
   }
@@ -234,14 +242,20 @@ static void eventcb(struct bufferevent *bev, short events, void *arg) {
       xlog("error:%s\n", evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
     }
 
+    /*这里需要判断一下对端还在不在，因为对端可能先触发事件而close释放了*/
     if (partner) {
       /* Flush all pending data */
+      /*有事件时，先把本端的input buffer都读出来，把残留数据都发给对端*/
       readcb(bev, arg);
 
       if (evbuffer_get_length(bufferevent_get_output(partner))) {
         /* We still have to flush data from the other
          * side, but when that's done, close the other
          * side. */
+        /*如果对端的output buffer中还有数据残留，
+         *要确保对端数据写出去以后再关闭bev并释放，
+         *回调函数close_on_finished_writecb就是做这个事情的
+         *此外也要关闭对端的read操作，避免又读数据进来*/
         bufferevent_setcb(partner, NULL, close_on_finished_writecb, eventcb,
                           NULL);
         bufferevent_disable(partner, EV_READ);

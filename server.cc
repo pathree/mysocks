@@ -23,11 +23,9 @@ extern void readcb(struct bufferevent *bev, void *arg);
 extern void writecb(struct bufferevent *bev, void *arg);
 extern void eventcb(struct bufferevent *bev, short events, void *arg);
 
-enum bufferevent_filter_result filtercb_input(struct evbuffer *source,
-                                              struct evbuffer *destination,
-                                              ev_ssize_t dst_limit,
-                                              enum bufferevent_flush_mode mode,
-                                              void *arg) {
+static enum bufferevent_filter_result filtercb_input(
+    struct evbuffer *source, struct evbuffer *destination, ev_ssize_t dst_limit,
+    enum bufferevent_flush_mode mode, void *arg) {
   xlog("dst_limit:%ld, mode:%d\n", dst_limit, mode);
 
   char buf[1024] = {0};
@@ -35,7 +33,6 @@ enum bufferevent_filter_result filtercb_input(struct evbuffer *source,
   if (dst_limit > 0) len = dst_limit;
   while (evbuffer_get_length(source)) {
     int n = evbuffer_remove(source, buf, len);
-
     evbuffer_add(destination, buf, n);
 
     xlog("Transformed %d bytes\n", n);
@@ -47,11 +44,9 @@ enum bufferevent_filter_result filtercb_input(struct evbuffer *source,
     return BEV_OK;
 }
 
-enum bufferevent_filter_result filtercb_output(struct evbuffer *source,
-                                               struct evbuffer *destination,
-                                               ev_ssize_t dst_limit,
-                                               enum bufferevent_flush_mode mode,
-                                               void *arg) {
+static enum bufferevent_filter_result filtercb_output(
+    struct evbuffer *source, struct evbuffer *destination, ev_ssize_t dst_limit,
+    enum bufferevent_flush_mode mode, void *arg) {
   xlog("dst_limit:%ld, mode:%d\n", dst_limit, mode);
 
   char buf[1024] = {0};
@@ -59,16 +54,14 @@ enum bufferevent_filter_result filtercb_output(struct evbuffer *source,
   if (dst_limit > 0) len = dst_limit;
   while (evbuffer_get_length(source)) {
     int n = evbuffer_remove(source, buf, len);
-
     evbuffer_add(destination, buf, n);
 
     xlog("Transformed %d bytes\n", n);
   }
 
-  if (evbuffer_get_length(source) > 0)
-    return BEV_NEED_MORE;
-  else
-    return BEV_OK;
+  if (evbuffer_get_length(source) > 0) return BEV_NEED_MORE;
+
+  return BEV_OK;
 }
 
 void readcb(struct bufferevent *bev, void *arg) {
