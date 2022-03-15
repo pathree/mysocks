@@ -72,8 +72,7 @@ int getsockaddr_from_fd(int fd, char ip[], int ipsize, int* port) {
   return 0;
 }
 
-SSL_CTX* ssl_ctx_new(int is_server, const char* cert_file,
-                     const char* key_file) {
+SSL_CTX* ssl_ctx_new(int is_server, const char* cert, const char* pkey) {
   SSL_library_init();
   ERR_load_crypto_strings();
   SSL_load_error_strings();
@@ -92,26 +91,27 @@ SSL_CTX* ssl_ctx_new(int is_server, const char* cert_file,
   SSL_CTX* ctx = NULL;
   ctx = SSL_CTX_new(is_server ? TLS_server_method() : TLS_client_method());
 
-  if (cert_file) {
-    if (!SSL_CTX_use_certificate_chain_file(ctx, cert_file)) {
-      xlog("SSL_CTX_use_certificate_chain_file(%s) failed", cert_file);
+  if (cert) {
+    if (!SSL_CTX_use_certificate_chain_file(ctx, cert)) {
+      xlog("SSL_CTX_use_certificate_chain_file(%s) failed", cert);
       SSL_CTX_free(ctx);
       return NULL;
     }
 
-    if (!SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM)) {
-      xlog("SSL_CTX_use_PrivateKey_file(%s) failed", key_file);
+    if (!SSL_CTX_use_PrivateKey_file(ctx, pkey, SSL_FILETYPE_PEM)) {
+      xlog("SSL_CTX_use_PrivateKey_file(%s) failed", pkey);
       SSL_CTX_free(ctx);
       return NULL;
     }
 
     if (!SSL_CTX_check_private_key(ctx)) {
-      xlog("SSL_CTX_check_private_key(%s) failed", key_file);
+      xlog("SSL_CTX_check_private_key(%s) failed", pkey);
       SSL_CTX_free(ctx);
       return NULL;
     }
   }
 
+  SSL_CTX_set_verify(ctx, SSL_VERIFY_NONE, NULL);
   SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2);
 
   return ctx;

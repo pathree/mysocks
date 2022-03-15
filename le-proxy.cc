@@ -7,27 +7,29 @@
 
 #include <assert.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <time.h>
 #include <unistd.h>
 
 #include <string>
 #include <unordered_map>
 
-#ifdef WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
-#include <netinet/in.h>
-#include <sys/socket.h>
-#endif
-
 #include "le-proxy.h"
 #include "stream.h"
 #include "utils.h"
 #include "xlog.h"
+
+/* To generate a cert and pkey and self-signed certificate
+ * run:
+ * openssl genrsa -out pkey 2048
+ * openssl req -new -key pkey -out cert.req
+ * openssl x509 -req -days 365 -in cert.req -signkey pkey -out cert
+ * put cert and pkey into certs directory
+ * */
 
 LE_PROXY proxy;
 
@@ -41,8 +43,7 @@ static void accept_cb(struct evconnlistener *listener, evutil_socket_t fd,
   struct bufferevent *bev_in = NULL;
 
   if (proxy.use_ssl) {
-    SSL *ssl;
-    ssl = SSL_new(proxy.ssl_ctx);
+    SSL *ssl = SSL_new(proxy.ssl_ctx);
     bev_in = bufferevent_openssl_socket_new(
         proxy.base, fd, ssl, BUFFEREVENT_SSL_ACCEPTING,
         BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
@@ -109,7 +110,7 @@ int main(int argc, char **argv) {
   proxy.dns_base =
       evdns_base_new(proxy.base, EVDNS_BASE_INITIALIZE_NAMESERVERS);
 
-  proxy.ssl_ctx = ssl_ctx_new(1, "certs/server.pem", "certs/server.key");
+  proxy.ssl_ctx = ssl_ctx_new(1, "certs/cert", "certs/pkey");
   if (!proxy.ssl_ctx) {
     event_base_free(proxy.base);
     return 1;
@@ -130,6 +131,7 @@ int main(int argc, char **argv) {
 
   /*释放资源*/
   evconnlistener_free(listener);
+  SSL_CTX_free(proxy.ssl_ctx);
   // evdns_base_free(proxy.dns_base, 0);
   event_base_free(proxy.base);
 

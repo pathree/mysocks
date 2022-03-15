@@ -1,6 +1,8 @@
 
 #include <unistd.h>
 
+#include <string>
+
 #include "utils.h"
 #include "xlog.h"
 
@@ -51,7 +53,35 @@ static void eventcb(struct bufferevent *bev, short events, void *arg) {
     send_req(bev);
   } else if (events & (BEV_EVENT_ERROR | BEV_EVENT_EOF)) {
     if (events & BEV_EVENT_ERROR) {
-      xlog("error:%s\n", evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
+      int dnserr, sockerr;
+      unsigned long err;
+
+      while ((err = (bufferevent_get_openssl_error(bev)))) {
+        char ebuf[256] = {0};
+        ERR_error_string_n(err, ebuf, sizeof(ebuf));
+
+        /* ERR_error_string_n
+         * error:00000001:lib(0):func(0):reason(1)
+         * error:14094410:SSL routines:ssl3_read_bytes:sslv3 alert handshake
+         failure */
+
+        xlog("%s\n", ebuf);
+      }
+
+      dnserr = bufferevent_socket_get_dns_error(bev);
+      if (dnserr) {
+        xlog("::DNS err: %s", evutil_gai_strerror(dnserr));
+      }
+
+      sockerr = evutil_socket_geterror(bufferevent_getfd(bev));
+      if (sockerr) {
+        xlog("::socket err [fd:%d]: %s", bufferevent_getfd(bev),
+             evutil_socket_error_to_string(sockerr));
+      }
+
+      if (errno)
+        xlog("error:%s\n",
+             evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
     }
 
     xlog("Closing fd:%d\n", bufferevent_getfd(bev));
@@ -121,8 +151,7 @@ int main(int argc, char **argv) {
       return 1;
     }
 
-    SSL *ssl;
-    ssl = SSL_new(ssl_ctx);
+    SSL *ssl = SSL_new(ssl_ctx);
     bev = bufferevent_openssl_socket_new(
         base, -1, ssl, BUFFEREVENT_SSL_CONNECTING,
         BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
@@ -134,6 +163,7 @@ int main(int argc, char **argv) {
 
   if (!bev) {
     perror("bufferevent_socket_new/bufferevent_openssl_socket_new");
+    SSL_CTX_free(ssl_ctx);
     event_base_free(base);
     return 1;
   }
@@ -142,6 +172,7 @@ int main(int argc, char **argv) {
                                  connect_to_addrlen) < 0) {
     perror("bufferevent_socket_connect");
     bufferevent_free(bev);
+    SSL_CTX_free(ssl_ctx);
     event_base_free(base);
     return 1;
   }
@@ -167,6 +198,7 @@ int main(int argc, char **argv) {
   event_base_dispatch(base);
 
   /*释放资源*/
+  SSL_CTX_free(ssl_ctx);
   // evdns_base_free(proxy.dns_base, 0);
   event_base_free(base);
 

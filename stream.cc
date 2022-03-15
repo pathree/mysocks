@@ -226,10 +226,33 @@ void stream_eventcb(struct bufferevent *bev, short events, void *arg) {
 
   if (events & (BEV_EVENT_EOF | BEV_EVENT_ERROR)) {
     if (events & BEV_EVENT_ERROR) {
-      int err = bufferevent_socket_get_dns_error(bev);
-      if (err)
-        xlog("error:%s\n", evutil_gai_strerror(err));
-      else
+      int dnserr, sockerr;
+      unsigned long err;
+
+      while ((err = (bufferevent_get_openssl_error(bev)))) {
+        char ebuf[256] = {0};
+        ERR_error_string_n(err, ebuf, sizeof(ebuf));
+
+        /* ERR_error_string_n
+         * error:00000001:lib(0):func(0):reason(1)
+         * error:14094410:SSL routines:ssl3_read_bytes:sslv3 alert handshake
+         failure */
+
+        xlog("%s\n", ebuf);
+      }
+
+      dnserr = bufferevent_socket_get_dns_error(bev);
+      if (dnserr) {
+        xlog("::DNS err: %s", evutil_gai_strerror(dnserr));
+      }
+
+      sockerr = evutil_socket_geterror(bufferevent_getfd(bev));
+      if (sockerr) {
+        xlog("::socket err [fd:%d]: %s", bufferevent_getfd(bev),
+             evutil_socket_error_to_string(sockerr));
+      }
+
+      if (errno)
         xlog("error:%s\n",
              evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR()));
     }
