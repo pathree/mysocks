@@ -1,12 +1,11 @@
-#include <event2/buffer.h>
-#include <event2/bufferevent.h>
-#include <event2/dns.h>
-#include <event2/event.h>
-#include <event2/util.h>
+
+#include <unistd.h>
 
 #include "utils.h"
 #include "xlog.h"
 
+int use_ssl = 0;
+static SSL_CTX *ssl_ctx = NULL;
 char req[1024] = {0};
 
 static void readcb(struct bufferevent *bev, void *arg);
@@ -64,17 +63,36 @@ static void syntax(void) {
   fputs("Syntax:\n", stderr);
   fputs("   client <forward-to-addr> <contents>\n", stderr);
   fputs("Example:\n", stderr);
-  fputs("   client 127.0.0.1:8088 HelloWorld\n", stderr);
+  fputs("   client [127.0.0.1:8088] HelloWorld\n", stderr);
 
   exit(1);
 }
 
 int main(int argc, char **argv) {
-  if (argc < 3) {
-    syntax();
+  opterr = 0;
+  int c;
+  while ((c = getopt(argc, argv, "s")) != -1) {
+    switch (c) {
+      case 's':
+        use_ssl = 1;
+        break;
+      case '?':
+        syntax();
+    }
   }
 
-  sprintf(req, "%s %s", argv[1], argv[2]);
+  argc -= optind;
+  argv += optind;
+
+  if (!*argv) syntax();
+
+  char forward_to_addr_port[128] = "127.0.0.1:8088";
+  sprintf(req, "%s %s", forward_to_addr_port, *argv);
+
+  if (use_ssl)
+    xlog("Connect to %s using SSL\n", "127.0.0.1:80");
+  else
+    xlog("Connect to %s\n", "127.0.0.1:80");
 
   struct sockaddr_storage connect_to_addr;
   memset(&connect_to_addr, 0, sizeof(connect_to_addr));
@@ -95,11 +113,27 @@ int main(int argc, char **argv) {
 
   /*设置BEV_OPT_DEFER_CALLBACKS，把回调推迟到eventloop中
    *否则没有回调事件时eventloop就退出了*/
-  struct bufferevent *bev;
-  bev = bufferevent_socket_new(base, -1,
-                               BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+  struct bufferevent *bev = NULL;
+  if (use_ssl) {
+    ssl_ctx = ssl_ctx_new(0, NULL, NULL);
+    if (!ssl_ctx) {
+      event_base_free(base);
+      return 1;
+    }
+
+    SSL *ssl;
+    ssl = SSL_new(ssl_ctx);
+    bev = bufferevent_openssl_socket_new(
+        base, -1, ssl, BUFFEREVENT_SSL_CONNECTING,
+        BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+    bufferevent_openssl_set_allow_dirty_shutdown(bev, 1);
+  } else {
+    bev = bufferevent_socket_new(
+        base, -1, BEV_OPT_CLOSE_ON_FREE | BEV_OPT_DEFER_CALLBACKS);
+  }
+
   if (!bev) {
-    perror("bufferevent_socket_new");
+    perror("bufferevent_socket_new/bufferevent_openssl_socket_new");
     event_base_free(base);
     return 1;
   }
@@ -131,6 +165,9 @@ int main(int argc, char **argv) {
   bufferevent_enable(bev, EV_READ);
 
   event_base_dispatch(base);
+
+  /*释放资源*/
+  // evdns_base_free(proxy.dns_base, 0);
   event_base_free(base);
 
   return 0;

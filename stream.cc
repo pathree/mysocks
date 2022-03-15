@@ -1,9 +1,3 @@
-/*
-  This example code shows how to write an (optionally encrypting) SSL proxy
-  with Libevent's bufferevent layer.
-
-  XXX It's a little ugly and should probably be cleaned up.
- */
 
 #include <assert.h>
 #include <errno.h>
@@ -15,24 +9,8 @@
 #include <string>
 #include <unordered_map>
 
-#ifdef WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#else
 #include <netinet/in.h>
 #include <sys/socket.h>
-#endif
-
-#include <event2/buffer.h>
-#include <event2/bufferevent.h>
-#include <event2/bufferevent_ssl.h>
-#include <event2/dns.h>
-#include <event2/listener.h>
-#include <event2/util.h>
-
-#include <openssl/err.h>
-#include <openssl/rand.h>
-#include <openssl/ssl.h>
 
 #include "le-proxy.h"
 #include "stream.h"

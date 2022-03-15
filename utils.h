@@ -14,8 +14,15 @@
 #include <event2/listener.h>
 #include <event2/util.h>
 
+#include <openssl/err.h>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
+
 #include <sys/sysinfo.h>
 #include <string>
+
+SSL_CTX *ssl_ctx_new(int is_server, const char *cert_file,
+                     const char *key_file);
 
 char *sock_ntop(const struct sockaddr *sa, char str[], int strsize, int *port);
 int getsockaddr_from_fd(int fd, char ip[], int ipsize, int *port);

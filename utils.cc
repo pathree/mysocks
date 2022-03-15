@@ -1,12 +1,6 @@
 
 
 #include <arpa/inet.h>
-#include <event2/buffer.h>
-#include <event2/bufferevent.h>
-#include <event2/event.h>
-#include <event2/listener.h>
-#include <event2/util.h>
-
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -14,6 +8,9 @@
 #include <sys/un.h>
 
 #include <string>
+
+#include "utils.h"
+#include "xlog.h"
 
 char* sock_ntop(const struct sockaddr* sa, char addr[], int addrsize,
                 int* port) {
@@ -73,4 +70,49 @@ int getsockaddr_from_fd(int fd, char ip[], int ipsize, int* port) {
 
   sock_ntop((struct sockaddr*)&ss, ip, ipsize, port);
   return 0;
+}
+
+SSL_CTX* ssl_ctx_new(int is_server, const char* cert_file,
+                     const char* key_file) {
+  SSL_library_init();
+  ERR_load_crypto_strings();
+  SSL_load_error_strings();
+  OpenSSL_add_all_algorithms();
+  if (SSLeay() != OPENSSL_VERSION_NUMBER) {
+    xlog("Version mismatch for openssl: compiled with %lx but running with %lx",
+         (unsigned long)OPENSSL_VERSION_NUMBER, (unsigned long)SSLeay());
+    return NULL;
+  }
+
+  if (!RAND_poll()) {
+    xlog("RAND_poll() failed.");
+    return NULL;
+  }
+
+  SSL_CTX* ctx = NULL;
+  ctx = SSL_CTX_new(is_server ? TLS_server_method() : TLS_client_method());
+
+  if (cert_file) {
+    if (!SSL_CTX_use_certificate_chain_file(ctx, cert_file)) {
+      xlog("SSL_CTX_use_certificate_chain_file(%s) failed", cert_file);
+      SSL_CTX_free(ctx);
+      return NULL;
+    }
+
+    if (!SSL_CTX_use_PrivateKey_file(ctx, key_file, SSL_FILETYPE_PEM)) {
+      xlog("SSL_CTX_use_PrivateKey_file(%s) failed", key_file);
+      SSL_CTX_free(ctx);
+      return NULL;
+    }
+
+    if (!SSL_CTX_check_private_key(ctx)) {
+      xlog("SSL_CTX_check_private_key(%s) failed", key_file);
+      SSL_CTX_free(ctx);
+      return NULL;
+    }
+  }
+
+  SSL_CTX_set_options(ctx, SSL_OP_NO_SSLv2);
+
+  return ctx;
 }
